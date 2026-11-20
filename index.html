@@ -2,6 +2,7 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>ULTRA KING</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
 :root{color-scheme:dark}
@@ -63,7 +64,7 @@ const COL=['#e53935','#43a047','#fdd835','#1e88e5','#fb8c00','#8e24aa'],DK=['#7f
 const cvs=$('#cv'),ctx=cvs.getContext('2d'),bgc=document.createElement('canvas'),bx=bgc.getContext('2d');
 const fxc=$('#fx'),fx=fxc.getContext('2d'),parts=[];let showerT=0;
 let W,H,dpr,cx,cy,g=20,mode,nA,ARMS,r0,TRACK_LEN,OUTER_MAX,HOME_START,HOME_END,FINISH,DONE,ring,lane,done,bases,pods,armOf,active=[],tok={},gfx={},pv={},turn=0,state='SETUP',cpu=false,rig=null,consecutiveSixes=0,rank=[],roll=0,valid=[],nPlayers=4;
-let drot=0,dsc=1,T=0,last=0,rig2=null,capN={},rec={},role='local',peer=null,hostConn=null,myColor=0,pnames={},bots={},players=[],pidMap={},stream=null,micOn=false,tEnd=0,tOn=false,uiMode='local',roomCode='';const ana={},calls={},audEls={};
+let drot=0,dsc=1,T=0,last=0,rig2=null,capN={},rec={},role='local',myColor=0,pnames={},bots={},players=[],pidMap={},stream=null,micOn=false,tEnd=0,tOn=false,uiMode='local',roomCode='';const ana={},calls={},audEls={};
 const colorsFor=n=>n===2?[0,2]:(n<=4?[0,1,2,3]:[0,1,4,3,2,5]).slice(0,n),isRig=c=>c===rig||c===rig2;
 const anims=[],tween=(d,f)=>new Promise(r=>anims.push({t:0,d,f,r})),isCPU=c=>(cpu&&c!==active[0])||!!bots[c],pk=a=>a[rnd()*a.length|0];
 let ac,mg,nb,rb;
@@ -282,52 +283,61 @@ active.forEach(c=>{tok[c]=[-1,-1,-1,-1];pv[c]=1+(rnd()*6|0);gfx[c]=[0,1,2,3].map
 resize();layout(true);$('#setup').classList.add('hide');$('#msg').classList.remove('hide');turn=0}
 $('#go').onclick=()=>{unlock();role='local';cpu=$('#cpu').checked;begin();startTurn()};
 const esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),setSt=t=>$('#st').textContent=t,sleep=wait;
-const bc=m=>{if(role==='host')players.forEach(p=>{try{if(p.cn&&p.cn.open)p.cn.send(m)}catch(e){}})};
+const bc=m=>{if(role==='host')pub({...m,q:++seq})};
 const snap=()=>({tok:JSON.parse(JSON.stringify(tok)),rank:rank.slice(),turn,state,valid:valid.slice(),roll,pv:{...pv},tOn,left:Math.max(0,(tEnd-Date.now())/1000)});
 const sync=()=>bc({type:'STATE',...snap()});
 const mine=c=>role==='local'?!isCPU(c):c===myColor;
-const sendH=m=>{try{hostConn&&hostConn.send(m)}catch(e){}};
-const reqRoll=()=>{if(role==='guest'){state='WAIT_HOST';sendH({type:'DICE'})}else doRoll()};
-const reqPick=(c,i)=>{if(role==='guest'){state='WAIT_HOST';setPulse(c,[]);sendH({type:'PICK',i})}else play(c,i,roll)};
-const ICE={debug:1,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:stun2.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'}]}};
-let jt=null;
-const netErr=e=>({'peer-unavailable':'Room not found or Host closed','unavailable-id':'Room code already in use','network':'Network error — check your connection','server-error':'Server error — try again','socket-error':'Server connection lost','socket-closed':'Server connection closed','browser-incompatible':'Browser does not support online play','webrtc':'Connection failed — try another network'}[e&&e.type]||'Connection error: '+((e&&e.type)||e));
-function closeNet(){clearTimeout(jt);jt=null;try{$('#retryJ').classList.add('hide')}catch(e){}try{peer&&peer.destroy()}catch(e){}peer=null;hostConn=null;players=[];role='local'}
-function lobby(){const names=players.map(p=>p.name);nPlayers=Math.max(2,names.length);$('#plC').innerHTML=names.map((n,i)=>`<div>${i?'':'&#9819; '}${esc(n)}</div>`).join('');$('#goC').disabled=names.length<2;bc({type:'LOBBY',names,players:names})}
-function hostMsg(cn,m){
-if(m.type==='JOIN'){if(players.length>=6||state!=='SETUP'){try{cn.send({type:'FULL'})}catch(e){}setTimeout(()=>cn.close(),300);return}
-players.push({name:String(m.name||'Player').slice(0,10),pid:m.pid,cn});lobby();return}
-const p=players.find(x=>x.cn===cn);if(!p||p.color===undefined)return;const c=p.color;
-if(m.type==='DICE'){if(state==='WAIT_ROLL'&&active[turn]===c)doRoll();else sync()}
-else if(m.type==='PICK'){if(state==='WAIT_MOVE'&&active[turn]===c&&valid.includes(m.i))play(c,m.i,roll);else sync()}}
-function drop(cn){const i=players.findIndex(p=>p.cn===cn);if(i<0)return;const p=players[i];
+const sendH=m=>pub({...m,id:myId});
+const reqRoll=()=>{if(role==='guest'){state='WAIT_HOST';sendH({type:'REQ_ROLL'})}else doRoll()};
+const reqPick=(c,i)=>{if(role==='guest'){state='WAIT_HOST';setPulse(c,[]);sendH({type:'REQ_MOVE',i})}else play(c,i,roll)};
+const BROKER='wss://broker.emqx.io:8084/mqtt',ICE={debug:1,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:stun2.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'}]}};
+let cl=null,topic='',myId='',seq=0,lastQ=0,hostSid=null,joined=false,jt=null,jr=null,vp=null;
+const pub=m=>{try{cl&&cl.connected&&cl.publish(topic,JSON.stringify({...m,sid:myId}),{qos:1})}catch(e){}};
+function netOpen(tp,ready){topic=tp;myId='uk_'+Math.random().toString(16).slice(2,10);
+const c=cl=mqtt.connect(BROKER,{clientId:myId,clean:true,reconnectPeriod:2000,will:{topic:tp,payload:JSON.stringify({type:'BYE',id:myId,sid:myId}),qos:1}});
+c.on('connect',()=>c.subscribe(tp,{qos:1},err=>{if(!err&&cl===c)ready()}));
+c.on('message',(t,b)=>{if(cl===c)onMsg(b)});
+c.on('close',()=>{if(cl===c&&role==='host'&&state==='SETUP')setSt('Connection lost — reconnecting...')});
+c.on('error',()=>{})}
+function closeNet(){clearTimeout(jt);clearInterval(jr);jt=jr=null;try{$('#retryJ').classList.add('hide')}catch(e){}
+const c=cl;if(c){pub({type:'BYE',id:myId});cl=null;try{c.end()}catch(e){}}
+players=[];role='local';joined=false;hostSid=null}
+function onMsg(b){let m;try{m=JSON.parse(b.toString())}catch(e){return}
+if(!m||m.sid===myId)return;
+if(role==='host')hostMsg(m);
+else if(role==='guest'){
+if(hostSid?m.sid!==hostSid:(m.type!=='LOBBY'&&m.type!=='FULL'))return;
+if(m.q!==undefined){if(m.q<=lastQ)return;lastQ=m.q}
+if(m.type==='BYE'){if(state==='SETUP'){setSt('Host closed the room');$('#retryJ').classList.remove('hide')}else{$('#msg').textContent='Host disconnected';state='LOST'}return}
+guestMsg(m)}}
+function lobby(){const names=players.map(p=>p.name);nPlayers=Math.max(2,names.length);$('#plC').innerHTML=names.map((n,i)=>`<div>${i?'':'&#9819; '}${esc(n)}</div>`).join('');$('#goC').disabled=names.length<2;bc({type:'LOBBY',players:players.map(p=>({id:p.pid,name:p.name}))})}
+function hostMsg(m){const ex=players.find(x=>x.pid===m.id);
+if(m.type==='JOIN'){if(ex){if(ex.color!==undefined)delete bots[ex.color];state==='SETUP'?lobby():sync();return}
+if(players.length>=6||state!=='SETUP'){pub({type:'FULL',to:m.id});return}
+players.push({name:String(m.name||'Player').slice(0,10),pid:m.id});lobby();return}
+if(m.type==='BYE'){drop(m.id);return}
+const p=ex;if(!p||p.color===undefined)return;const c=p.color;
+if(m.type==='REQ_ROLL'){if(state==='WAIT_ROLL'&&active[turn]===c)doRoll();else sync()}
+else if(m.type==='REQ_MOVE'){if(state==='WAIT_MOVE'&&active[turn]===c&&valid.includes(m.i))play(c,m.i,roll);else sync()}}
+function drop(id){const i=players.findIndex(p=>p.pid===id);if(i<1)return;const p=players[i];
 if(state==='SETUP'){players.splice(i,1);lobby()}else{bots[p.color]=true;if(active[turn]===p.color)tEnd=0;msg(p.name+' left, bot takes over')}}
-function hostRoom(){closeNet();if(typeof Peer==='undefined'){setSt('Online play needs the PeerJS script, which is blocked here');return}
-role='host';let tries=0;const ch='23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-const open=()=>{roomCode='UK'+[0,1,2].map(()=>ch[rnd()*ch.length|0]).join('');$('#code').textContent='-----';setSt('Creating room...');peer=new Peer('ultraking-'+roomCode.trim().toUpperCase(),ICE);
-peer.on('open',id=>{$('#code').textContent=roomCode;players=[{name:$('#nameC').value.trim()||'Host',pid:id,cn:null}];lobby();setSt('Room Ready — Share Code')});
-peer.on('disconnected',()=>{try{peer&&!peer.destroyed&&peer.reconnect()}catch(e){}});
-peer.on('connection',cn=>{cn.on('data',m=>hostMsg(cn,m));cn.on('close',()=>drop(cn));cn.on('error',()=>drop(cn))});
-peer.on('call',onCall);
-peer.on('error',e=>{if(e.type==='unavailable-id'&&tries++<6){try{peer.destroy()}catch(x){}open()}else setSt(netErr(e))})};open()}
+function hostRoom(){closeNet();if(typeof mqtt==='undefined'){setSt('Online play needs the MQTT script, which is blocked here');return}
+role='host';seq=0;const ch='23456789ABCDEFGHJKMNPQRSTUVWXYZ';roomCode='UK'+[0,1,2].map(()=>ch[rnd()*ch.length|0]).join('');
+$('#code').textContent='-----';setSt('Creating room...');
+jt=setTimeout(()=>setSt('Connection timed out — check network'),10000);
+netOpen('ultraking/room/'+roomCode.trim().toUpperCase(),()=>{clearTimeout(jt);if(!players.length){$('#code').textContent=roomCode;players=[{name:$('#nameC').value.trim()||'Host',pid:myId}];lobby()}setSt('Room Ready — Share Code')})}
 $('#nameC').oninput=()=>{if(players[0]){players[0].name=$('#nameC').value.trim()||'Host';lobby()}};
 $('#goC').onclick=()=>{if(players.length<2)return;unlock();nPlayers=players.length;role='host';cpu=false;bots={};
 const act=colorsFor(nPlayers);pnames={};pidMap={};players.forEach((p,k)=>{p.color=act[k];pnames[act[k]]=p.name;pidMap[act[k]]=p.pid});myColor=act[0];
-players.forEach(p=>{if(p.cn)p.cn.send({type:'START',n:nPlayers,pn:pnames,you:p.color,pids:pidMap})});
-begin();$('#mic').classList.remove('hide');startTurn()};
-function joinRoom(){closeNet();if(typeof Peer==='undefined'){setSt('Online play needs the PeerJS script, which is blocked here');return}
+const ys={};players.forEach(p=>ys[p.pid]=p.color);bc({type:'START',n:nPlayers,pn:pnames,ys,pids:pidMap});
+begin();$('#mic').classList.remove('hide');voiceInit();startTurn()};
+function joinRoom(){closeNet();if(typeof mqtt==='undefined'){setSt('Online play needs the MQTT script, which is blocked here');return}
 const code=$('#codeJ').value.trim().toUpperCase(),name=$('#nameJ').value.trim()||'Guest';if(code.length<5){setSt('Enter the 5-character room code');return}
-role='guest';const rb=$('#retryJ');rb.classList.add('hide');rb.onclick=joinRoom;setSt('Connecting...');
-const fail=t=>{clearTimeout(jt);jt=null;hostConn=null;try{peer&&peer.destroy()}catch(e){}peer=null;setSt(t);rb.classList.remove('hide')};
+role='guest';const rb=$('#retryJ');rb.onclick=joinRoom;setSt('Connecting...');lastQ=0;joined=false;hostSid=null;
+const fail=t=>{closeNet();setSt(t);rb.classList.remove('hide')};
 jt=setTimeout(()=>fail('Connection timed out — check code or switch network'),10000);
-peer=new Peer(ICE);
-peer.on('open',id=>{const cn=peer.connect('ultraking-'+code,{reliable:true,serialization:'json'});hostConn=cn;
-cn.on('open',()=>{clearTimeout(jt);jt=null;cn.send({type:'JOIN',name,pid:id});setSt('Joined! Waiting for the host to start...')});
-cn.on('data',guestMsg);
-cn.on('close',()=>{if(hostConn!==cn)return;if(state==='SETUP'){setSt('Disconnected from room');rb.classList.remove('hide')}else{$('#msg').textContent='Host disconnected';state='LOST'}});
-cn.on('error',()=>fail('Could not connect to room'))});
-peer.on('call',onCall);
-peer.on('error',e=>fail(netErr(e)))}
+netOpen('ultraking/room/'+code,()=>{const send=()=>pub({type:'JOIN',id:myId,name});send();
+if(joined||jr)return;clearTimeout(jt);jt=setTimeout(()=>fail('Room not found or Host closed'),8000);jr=setInterval(send,1500)})}
 $('#goJ').onclick=()=>{unlock();joinRoom()};
 const mq=[];let mb=false;
 async function pump(){if(mb)return;mb=true;while(mq.length){const m=mq.shift();try{await handle(m)}catch(e){}}mb=false}
@@ -341,9 +351,9 @@ tok=m.tok;rank=m.rank;turn=m.turn;valid=m.valid;roll=m.roll;Object.assign(pv,m.p
 active.forEach(c=>setPulse(c,state==='WAIT_MOVE'&&c===myColor&&active[turn]===c?valid:[]));
 if(state==='GAME_OVER')endUI()}}
 function guestMsg(m){
-if(m.type==='LOBBY')$('#plJ').innerHTML=(m.players||m.names).map(n=>`<div>${esc(n)}</div>`).join('');
-else if(m.type==='FULL'){setSt('Room is full or already started');closeNet()}
-else if(m.type==='START'){pnames=m.pn;myColor=m.you;pidMap=m.pids;nPlayers=m.n;cpu=false;role='guest';begin();$('#mic').classList.remove('hide')}
+if(m.type==='LOBBY'){if(!m.players.some(p=>p.id===myId))return;if(!joined){joined=true;hostSid=m.sid;clearTimeout(jt);clearInterval(jr);setSt('Joined! Waiting for Host...')}$('#plJ').innerHTML=m.players.map(p=>`<div>${esc(p.name)}</div>`).join('')}
+else if(m.type==='FULL'){if(m.to===myId){setSt('Room is full or already started');closeNet()}}
+else if(m.type==='START'){const y=m.ys&&m.ys[myId];if(y===undefined)return;pnames=m.pn;myColor=y;pidMap=m.pids;nPlayers=m.n;cpu=false;role='guest';begin();$('#mic').classList.remove('hide');voiceInit()}
 else{mq.push(m);pump()}}
 document.querySelectorAll('.tb').forEach(b=>b.onclick=()=>{uiMode=b.dataset.t;document.querySelectorAll('.tb').forEach(x=>x.classList.toggle('s',x===b));
 $('#pL').classList.toggle('hide',uiMode!=='local');$('#pC').classList.toggle('hide',uiMode!=='create');$('#pJ').classList.toggle('hide',uiMode!=='join');setSt('');
@@ -351,8 +361,10 @@ if(uiMode==='create')hostRoom();else closeNet()});
 function watch(s,col){try{audio();const an=ac.createAnalyser();an.fftSize=256;ac.createMediaStreamSource(s).connect(an);ana[col]={an,buf:new Uint8Array(256)}}catch(e){}}
 const colOf=id=>+Object.keys(pidMap).find(k=>pidMap[k]===id);
 function attach(id,s){let a=audEls[id];if(!a){a=document.createElement('audio');a.autoplay=true;a.playsInline=true;document.body.appendChild(a);audEls[id]=a}a.srcObject=s;try{a.play().catch(()=>{})}catch(e){}watch(s,colOf(id))}
-function onCall(call){try{call.answer(stream||undefined);call.on('stream',s=>attach(call.peer,s))}catch(e){}}
-function callAll(){Object.values(pidMap).forEach(id=>{if(!peer||id===peer.id||calls[id])return;try{const cl=peer.call(id,stream);calls[id]=cl;cl.on('stream',s=>attach(id,s));cl.on('close',()=>delete calls[id])}catch(e){}})}
+const vtoast=t=>{let e=$('#vt');if(!e){e=document.createElement('div');e.id='vt';e.style.cssText='position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:7;padding:6px 12px;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font:600 12px system-ui;pointer-events:none';document.body.appendChild(e)}e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',4000)};
+function voiceInit(){if(vp||typeof Peer==='undefined')return;try{vp=new Peer('ukv-'+myId,ICE);vp.on('call',onCall);vp.on('error',e=>{if(e.type!=='peer-unavailable')vtoast('Voice unavailable on this network')})}catch(e){vtoast('Voice unavailable on this network')}}
+function onCall(call){try{call.answer(stream||undefined);call.on('stream',s=>attach(call.peer.slice(4),s));call.on('error',()=>vtoast('Voice unavailable on this network'))}catch(e){}}
+function callAll(){voiceInit();setTimeout(()=>{if(!vp||!vp.open)vtoast('Voice unavailable on this network')},8000);Object.values(pidMap).forEach(id=>{if(!vp||id===myId||calls[id])return;try{const cl2=vp.call('ukv-'+id,stream);if(!cl2)return;calls[id]=cl2;cl2.on('stream',s=>attach(id,s));cl2.on('close',()=>delete calls[id]);cl2.on('error',()=>delete calls[id])}catch(e){vtoast('Voice unavailable on this network')}})}
 $('#mic').onclick=async()=>{const b=$('#mic');
 if(!stream){try{stream=await navigator.mediaDevices.getUserMedia({audio:true});watch(stream,myColor);callAll()}catch(e){b.textContent='Mic blocked';b.disabled=true;return}}
 micOn=!micOn;stream.getAudioTracks().forEach(t=>t.enabled=micOn);b.textContent=micOn?'Mic On':'Mic Off';b.classList.toggle('on',micOn)};
