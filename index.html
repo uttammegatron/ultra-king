@@ -39,7 +39,7 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none}
 <button id="go" class="btn">START GAME</button>
 </div>
 <div id="pC" class="hide"><input id="nameC" class="inp" placeholder="Your name" maxlength="10"><div id="code" style="font:900 34px system-ui;letter-spacing:.15em;margin:10px 0;color:#fde047">-----</div><div id="plC" style="font-weight:700;line-height:1.7;margin-bottom:12px"></div><button id="goC" class="btn" disabled>START ROOM</button></div>
-<div id="pJ" class="hide"><input id="nameJ" class="inp" placeholder="Your name" maxlength="10"><input id="codeJ" class="inp" placeholder="Room code" maxlength="5" style="text-transform:uppercase"><div id="plJ" style="font-weight:700;line-height:1.7;margin:6px 0 12px"></div><button id="goJ" class="btn">JOIN ROOM</button></div>
+<div id="pJ" class="hide"><input id="nameJ" class="inp" placeholder="Your name" maxlength="10"><input id="codeJ" class="inp" placeholder="Room code" maxlength="5" style="text-transform:uppercase"><div id="plJ" style="font-weight:700;line-height:1.7;margin:6px 0 12px"></div><button id="goJ" class="btn">JOIN ROOM</button><button id="retryJ" class="btn hide" style="margin-top:8px">RETRY</button></div>
 <div id="st" style="font-size:13px;opacity:.75;min-height:18px;margin-top:10px"></div>
 </div>
 </div>
@@ -289,8 +289,11 @@ const mine=c=>role==='local'?!isCPU(c):c===myColor;
 const sendH=m=>{try{hostConn&&hostConn.send(m)}catch(e){}};
 const reqRoll=()=>{if(role==='guest'){state='WAIT_HOST';sendH({type:'DICE'})}else doRoll()};
 const reqPick=(c,i)=>{if(role==='guest'){state='WAIT_HOST';setPulse(c,[]);sendH({type:'PICK',i})}else play(c,i,roll)};
-function closeNet(){try{peer&&peer.destroy()}catch(e){}peer=null;hostConn=null;players=[];role='local'}
-function lobby(){const names=players.map(p=>p.name);nPlayers=Math.max(2,names.length);$('#plC').innerHTML=names.map((n,i)=>`<div>${i?'':'&#9819; '}${esc(n)}</div>`).join('');$('#goC').disabled=names.length<2;bc({type:'LOBBY',names})}
+const ICE={debug:1,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:stun2.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'}]}};
+let jt=null;
+const netErr=e=>({'peer-unavailable':'Room not found or Host closed','unavailable-id':'Room code already in use','network':'Network error — check your connection','server-error':'Server error — try again','socket-error':'Server connection lost','socket-closed':'Server connection closed','browser-incompatible':'Browser does not support online play','webrtc':'Connection failed — try another network'}[e&&e.type]||'Connection error: '+((e&&e.type)||e));
+function closeNet(){clearTimeout(jt);jt=null;try{$('#retryJ').classList.add('hide')}catch(e){}try{peer&&peer.destroy()}catch(e){}peer=null;hostConn=null;players=[];role='local'}
+function lobby(){const names=players.map(p=>p.name);nPlayers=Math.max(2,names.length);$('#plC').innerHTML=names.map((n,i)=>`<div>${i?'':'&#9819; '}${esc(n)}</div>`).join('');$('#goC').disabled=names.length<2;bc({type:'LOBBY',names,players:names})}
 function hostMsg(cn,m){
 if(m.type==='JOIN'){if(players.length>=6||state!=='SETUP'){try{cn.send({type:'FULL'})}catch(e){}setTimeout(()=>cn.close(),300);return}
 players.push({name:String(m.name||'Player').slice(0,10),pid:m.pid,cn});lobby();return}
@@ -301,11 +304,12 @@ function drop(cn){const i=players.findIndex(p=>p.cn===cn);if(i<0)return;const p=
 if(state==='SETUP'){players.splice(i,1);lobby()}else{bots[p.color]=true;if(active[turn]===p.color)tEnd=0;msg(p.name+' left, bot takes over')}}
 function hostRoom(){closeNet();if(typeof Peer==='undefined'){setSt('Online play needs the PeerJS script, which is blocked here');return}
 role='host';let tries=0;const ch='23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-const open=()=>{roomCode='UK'+[0,1,2].map(()=>ch[rnd()*ch.length|0]).join('');peer=new Peer('ultraking-'+roomCode);
-peer.on('open',id=>{$('#code').textContent=roomCode;players=[{name:$('#nameC').value.trim()||'Host',pid:id,cn:null}];lobby();setSt('Share this code with your friends')});
+const open=()=>{roomCode='UK'+[0,1,2].map(()=>ch[rnd()*ch.length|0]).join('');$('#code').textContent='-----';setSt('Creating room...');peer=new Peer('ultraking-'+roomCode.trim().toUpperCase(),ICE);
+peer.on('open',id=>{$('#code').textContent=roomCode;players=[{name:$('#nameC').value.trim()||'Host',pid:id,cn:null}];lobby();setSt('Room Ready — Share Code')});
+peer.on('disconnected',()=>{try{peer&&!peer.destroyed&&peer.reconnect()}catch(e){}});
 peer.on('connection',cn=>{cn.on('data',m=>hostMsg(cn,m));cn.on('close',()=>drop(cn));cn.on('error',()=>drop(cn))});
 peer.on('call',onCall);
-peer.on('error',e=>{if(e.type==='unavailable-id'&&tries++<6){try{peer.destroy()}catch(x){}open()}else setSt('Connection error: '+e.type)})};open()}
+peer.on('error',e=>{if(e.type==='unavailable-id'&&tries++<6){try{peer.destroy()}catch(x){}open()}else setSt(netErr(e))})};open()}
 $('#nameC').oninput=()=>{if(players[0]){players[0].name=$('#nameC').value.trim()||'Host';lobby()}};
 $('#goC').onclick=()=>{if(players.length<2)return;unlock();nPlayers=players.length;role='host';cpu=false;bots={};
 const act=colorsFor(nPlayers);pnames={};pidMap={};players.forEach((p,k)=>{p.color=act[k];pnames[act[k]]=p.name;pidMap[act[k]]=p.pid});myColor=act[0];
@@ -313,14 +317,17 @@ players.forEach(p=>{if(p.cn)p.cn.send({type:'START',n:nPlayers,pn:pnames,you:p.c
 begin();$('#mic').classList.remove('hide');startTurn()};
 function joinRoom(){closeNet();if(typeof Peer==='undefined'){setSt('Online play needs the PeerJS script, which is blocked here');return}
 const code=$('#codeJ').value.trim().toUpperCase(),name=$('#nameJ').value.trim()||'Guest';if(code.length<5){setSt('Enter the 5-character room code');return}
-role='guest';setSt('Connecting...');peer=new Peer();
-peer.on('open',id=>{const cn=peer.connect('ultraking-'+code,{reliable:true});hostConn=cn;
-cn.on('open',()=>{cn.send({type:'JOIN',name,pid:id});setSt('Joined! Waiting for the host to start...')});
+role='guest';const rb=$('#retryJ');rb.classList.add('hide');rb.onclick=joinRoom;setSt('Connecting...');
+const fail=t=>{clearTimeout(jt);jt=null;hostConn=null;try{peer&&peer.destroy()}catch(e){}peer=null;setSt(t);rb.classList.remove('hide')};
+jt=setTimeout(()=>fail('Connection timed out — check code or switch network'),10000);
+peer=new Peer(ICE);
+peer.on('open',id=>{const cn=peer.connect('ultraking-'+code,{reliable:true,serialization:'json'});hostConn=cn;
+cn.on('open',()=>{clearTimeout(jt);jt=null;cn.send({type:'JOIN',name,pid:id});setSt('Joined! Waiting for the host to start...')});
 cn.on('data',guestMsg);
-cn.on('close',()=>{if(state==='SETUP')setSt('Disconnected from room');else{$('#msg').textContent='Host disconnected';state='LOST'}});
-cn.on('error',()=>setSt('Could not connect to room'))});
+cn.on('close',()=>{if(hostConn!==cn)return;if(state==='SETUP'){setSt('Disconnected from room');rb.classList.remove('hide')}else{$('#msg').textContent='Host disconnected';state='LOST'}});
+cn.on('error',()=>fail('Could not connect to room'))});
 peer.on('call',onCall);
-peer.on('error',e=>setSt(e.type==='peer-unavailable'?'Room not found':'Connection error: '+e.type))}
+peer.on('error',e=>fail(netErr(e)))}
 $('#goJ').onclick=()=>{unlock();joinRoom()};
 const mq=[];let mb=false;
 async function pump(){if(mb)return;mb=true;while(mq.length){const m=mq.shift();try{await handle(m)}catch(e){}}mb=false}
@@ -334,7 +341,7 @@ tok=m.tok;rank=m.rank;turn=m.turn;valid=m.valid;roll=m.roll;Object.assign(pv,m.p
 active.forEach(c=>setPulse(c,state==='WAIT_MOVE'&&c===myColor&&active[turn]===c?valid:[]));
 if(state==='GAME_OVER')endUI()}}
 function guestMsg(m){
-if(m.type==='LOBBY')$('#plJ').innerHTML=m.names.map(n=>`<div>${esc(n)}</div>`).join('');
+if(m.type==='LOBBY')$('#plJ').innerHTML=(m.players||m.names).map(n=>`<div>${esc(n)}</div>`).join('');
 else if(m.type==='FULL'){setSt('Room is full or already started');closeNet()}
 else if(m.type==='START'){pnames=m.pn;myColor=m.you;pidMap=m.pids;nPlayers=m.n;cpu=false;role='guest';begin();$('#mic').classList.remove('hide')}
 else{mq.push(m);pump()}}
